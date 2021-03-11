@@ -562,3 +562,10 @@ config RANDOM_TRUST_BOOTLOADER
 	booloader is trustworthy so it will be added to the kernel's entropy
 	pool. Otherwise, say N here so it will be regarded as device input that
 	only mixes the entropy pool.
+
+config SKELETON
+	tristate "Enable Skeleton"
+	default m
+	help
+		Enable skeleton driver
+
