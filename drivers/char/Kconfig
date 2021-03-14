@@ -568,4 +568,3 @@ config SKELETON
 	default m
 	help
 		Enable skeleton driver
-
