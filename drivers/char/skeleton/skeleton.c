@@ -5,6 +5,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/gpio.h>
+#include <linux/delay.h>
 #include <asm/io.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
@@ -12,10 +13,14 @@
 
 #define DEVICE_NAME "bcm-gpio-device"
 #define NRF24_CE 		16								// GPIO16
-#define NRF24_CS		26								// GPIO26
+#define NRF24_CSN		26								// GPIO26
 #define NRF24_SCLK	20								// GPIO20
 #define NRF24_MOSI	21								// GPIO21
 #define NRF24_MISO	19								// GPIO19
+
+#define NRF24_COMMAND_NOP 0xff
+
+#define HALF_PERIOD	500								// SCLK half period
 
 /* Per device structure */
 struct bcm_gpio_dev {
@@ -32,6 +37,7 @@ static ssize_t bcm_gpio_read(struct file*, char*, size_t, loff_t*);
 static ssize_t bcm_gpio_write(struct file *, const char __user *, size_t, loff_t *);
 static int bcm_gpio_open(struct inode *, struct file *);
 static int bcm_gpio_release(struct inode *, struct file *);
+static u8 bcm_gpio_send_byte(u8 value);
 
 static struct file_operations bcm_gpio_fops = {
 	.owner = THIS_MODULE,	/* Owner */
@@ -142,6 +148,9 @@ static int __init bcm_gpio_mod_init(void)
 
 	mutex_unlock(&bcm_gpio_devp->lock);
 
+	gpio_set_value(NRF24_CE, 0);
+	gpio_set_value(NRF24_CSN, 1);
+	gpio_set_value(NRF24_SCLK, 0);
 	return 0;
 }
 
@@ -198,18 +207,19 @@ static ssize_t bcm_gpio_read(struct file *file, char* buf, size_t count, loff_t 
 	} else
 	{
 		bcm_gpio_devp->busy=1;
-		return 3;
+		return 2;
 	}	
 	mutex_unlock(&bcm_gpio_devp->lock);
-	return 3;
+	return 2;
 }
 
 static ssize_t bcm_gpio_write(struct file * filep, const char __user * userp, size_t size, loff_t * offset)
 {
 	int i;
+	u8 ret=0;
 	char kbuf[4];
 	if (copy_from_user(kbuf, userp, 4)!=0)
-		return -EFAULT;
+		return -1;
 		
 	if (mutex_lock_interruptible(&bcm_gpio_devp->lock))	
 	{
@@ -222,13 +232,17 @@ static ssize_t bcm_gpio_write(struct file * filep, const char __user * userp, si
 		bcm_gpio_devp->data[i] = kbuf[i];
 
 	printk(KERN_INFO "kbuf[0] %i \n", kbuf[0]);	
-	gpio_set_value(16,(int)(kbuf[0]-48));
-	gpio_set_value(20,(int)(kbuf[1]-48));
-	gpio_set_value(21,(int)(kbuf[2]-48));
-	gpio_set_value(26,(int)(kbuf[3]-48));
+	//gpio_set_value(16,(int)(kbuf[0]-48));
+	//gpio_set_value(20,(int)(kbuf[1]-48));
+	//gpio_set_value(21,(int)(kbuf[2]-48));
+	//gpio_set_value(26,(int)(kbuf[3]-48));
+
+	bcm_gpio_send_byte(kbuf[0]);
+	ret = bcm_gpio_send_byte(NRF24_COMMAND_NOP);
+	printk(KERN_INFO "MISO: %i\n", ret);
 
 	mutex_unlock(&bcm_gpio_devp->lock);
-	return 0;
+	return 2;
 }
 
 static int bcm_gpio_open(struct inode * node, struct file * file)
@@ -245,6 +259,39 @@ static int bcm_gpio_release(struct inode * node, struct file * file)
 {
 	printk(KERN_INFO "bcm gpio release done\n");
 	return 0;
+}
+
+static u8 bcm_gpio_send_byte(u8 value)
+{
+	int i=0;
+	u8 ret=0;
+	printk(KERN_INFO "value %i \n", value);
+
+	gpio_set_value(NRF24_CSN, 0);
+	
+	for(i=7;i>=0;i--)
+	{
+		if (value & (1 << i))
+		{
+			gpio_set_value(NRF24_MOSI, 1);
+		} else
+		{
+			gpio_set_value(NRF24_MOSI, 0);
+		}
+
+		gpio_set_value(NRF24_SCLK, 0);
+		ndelay(HALF_PERIOD);
+	
+		printk(KERN_INFO " %i \n", gpio_get_value(NRF24_MISO));
+		ret = ret | (gpio_get_value(NRF24_MISO) << i); 
+		gpio_set_value(NRF24_SCLK, 1);
+		ndelay(HALF_PERIOD);
+	}
+
+	gpio_set_value(NRF24_CSN, 1);
+	gpio_set_value(NRF24_SCLK, 0);
+	gpio_set_value(NRF24_MOSI, 0);
+	return ret;
 }
 
 MODULE_LICENSE("GPL");
