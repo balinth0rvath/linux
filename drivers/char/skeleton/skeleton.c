@@ -13,9 +13,11 @@
 
 #define DEVICE_NAME "bcm-gpio-device"
 #define NRF24_CE 		16								// GPIO16
-#define NRF24_CSN		26								// GPIO26
 #define NRF24_SCLK	20								// GPIO20
 #define NRF24_MOSI	21								// GPIO21
+#define NRF24_CSN		26								// GPIO26
+
+#define NRF24_IRQ	 	12								// GPIO12
 #define NRF24_MISO	19								// GPIO19
 
 #define NRF24_COMMAND_NOP 0xff
@@ -54,7 +56,7 @@ struct class* bcm_gpio_class;
 static irqreturn_t gpio_irq_handler(int irq, void* dev_id)
 {
 	irq_counter++;
-	printk(KERN_INFO "GPIO 12 irq handled: %i \n", irq_counter);
+	printk(KERN_INFO "GPIO %i irq handled: %i \n", NRF24_IRQ, irq_counter);
 	return IRQ_HANDLED;
 }
 
@@ -110,35 +112,35 @@ static int __init bcm_gpio_mod_init(void)
 	bcm_gpio_devp->data[2]='0';
 	bcm_gpio_devp->data[3]='0';
 
-	// set GPIO 12 to input
+	// set IRQ and MISO to input
 
-	if (gpio_direction_input(12)!=0 ||
-		gpio_direction_input(19)!=0)
+	if (gpio_direction_input(NRF24_IRQ)!=0 ||
+		gpio_direction_input(NRF24_MISO)!=0)
 	{
-		printk(KERN_INFO "Cannot set GPIO 12 19 to input \n");
+		printk(KERN_INFO "Cannot set GPIO %i %i to input \n", NRF24_IRQ, NRF24_MISO);
 		mutex_unlock(&bcm_gpio_devp->lock);
 		return -1;
 	}
 
-	if (gpio_direction_output(16,1)!=0 ||
-		gpio_direction_output(20,1)!=0 ||
-		gpio_direction_output(21,1)!=0 ||
-		gpio_direction_output(26,1)!=0)
+	if (gpio_direction_output(NRF24_CE,1)!=0 ||
+		gpio_direction_output(NRF24_SCLK,1)!=0 ||
+		gpio_direction_output(NRF24_MOSI,1)!=0 ||
+		gpio_direction_output(NRF24_CSN,1)!=0)
 
 	{
-		printk(KERN_INFO "Cannot set GPIO 16 20 21 26 to output \n");
+		printk(KERN_INFO "Cannot set GPIO %i %i %i %i to output \n", NRF24_CE, NRF24_SCLK, NRF24_MOSI, NRF24_CSN);
 		mutex_unlock(&bcm_gpio_devp->lock);
 		return -1;
 	}
 
 	// request irq for GPIO 12
 
-	irq_line = gpio_to_irq(12);
-	printk(KERN_INFO "IRQ line for GPIO 12 is %i \n", irq_line);
+	irq_line = gpio_to_irq(NRF24_IRQ);
+	printk(KERN_INFO "IRQ line for GPIO %i is %i \n", NRF24_IRQ, irq_line);
 	
-	if (request_irq(irq_line, gpio_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt GPIO 12", NULL)<0)
+	if (request_irq(irq_line, gpio_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt nRF24 GPIO ", NULL)<0)
 	{
-		printk(KERN_INFO "Cannot get IRQ for GPIO12 \n");
+		printk(KERN_INFO "Cannot get IRQ for GPIO %i \n", NRF24_IRQ);
 		mutex_unlock(&bcm_gpio_devp->lock);
 		return -1;
 	}
@@ -158,7 +160,7 @@ static void __exit bcm_gpio_mod_exit(void)
 {
 	// release irq line       
 	int irq_line;
-	irq_line = gpio_to_irq(12);
+	irq_line = gpio_to_irq(NRF24_IRQ);
 	free_irq(irq_line, NULL);
 
 	// remove cdev
@@ -237,8 +239,13 @@ static ssize_t bcm_gpio_write(struct file * filep, const char __user * userp, si
 	//gpio_set_value(21,(int)(kbuf[2]-48));
 	//gpio_set_value(26,(int)(kbuf[3]-48));
 
+	gpio_set_value(NRF24_CSN, 0);
+	ndelay(HALF_PERIOD);
+	ndelay(HALF_PERIOD);
+
 	bcm_gpio_send_byte(kbuf[0]);
 	ret = bcm_gpio_send_byte(NRF24_COMMAND_NOP);
+	gpio_set_value(NRF24_CSN, 1);
 	printk(KERN_INFO "MISO: %i\n", ret);
 
 	mutex_unlock(&bcm_gpio_devp->lock);
@@ -267,8 +274,6 @@ static u8 bcm_gpio_send_byte(u8 value)
 	u8 ret=0;
 	printk(KERN_INFO "value %i \n", value);
 
-	gpio_set_value(NRF24_CSN, 0);
-	
 	for(i=7;i>=0;i--)
 	{
 		if (value & (1 << i))
@@ -282,15 +287,13 @@ static u8 bcm_gpio_send_byte(u8 value)
 		gpio_set_value(NRF24_SCLK, 0);
 		ndelay(HALF_PERIOD);
 	
-		printk(KERN_INFO " %i \n", gpio_get_value(NRF24_MISO));
+		printk(KERN_INFO "clk %i \n", gpio_get_value(NRF24_MISO));
 		ret = ret | (gpio_get_value(NRF24_MISO) << i); 
 		gpio_set_value(NRF24_SCLK, 1);
 		ndelay(HALF_PERIOD);
 	}
 
-	gpio_set_value(NRF24_CSN, 1);
 	gpio_set_value(NRF24_SCLK, 0);
-	gpio_set_value(NRF24_MOSI, 0);
 	return ret;
 }
 
