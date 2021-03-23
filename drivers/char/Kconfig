@@ -563,8 +563,9 @@ config RANDOM_TRUST_BOOTLOADER
 	pool. Otherwise, say N here so it will be regarded as device input that
 	only mixes the entropy pool.
 
-config SKELETON
-	tristate "Enable Skeleton"
+config CUSTOM_NRF24
+	tristate "Custom nRF24 driver"
 	default m
 	help
-		Enable skeleton driver
+		Enable custom nRF24 driver
+
