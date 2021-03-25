@@ -67,7 +67,7 @@
 
 /* Per device structure */
 struct nrf24_dev {
-	char data[4];
+	char payload_buffer[32];
 	struct cdev cdev;
 	char name[10];
 	int busy;
@@ -80,8 +80,9 @@ static ssize_t nrf24_read(struct file*, char*, size_t, loff_t*);
 static ssize_t nrf24_write(struct file *, const char __user *, size_t, loff_t *);
 static int nrf24_open(struct inode *, struct file *);
 static int nrf24_release(struct inode *, struct file *);
-
+static int nrf24_get_status(void);
 static int nrf24_check_device(void);
+static void nrf24_init_device(void);
 
 static u8 nrf24_send_byte(u8 value);
 
@@ -96,30 +97,23 @@ static struct file_operations nrf24_fops = {
 static dev_t nrf24_device_number;
 struct class* nrf24_class;
 
-
 static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
 	irq_counter++;
-	printk(KERN_INFO "nrf24 %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
+	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
 	return IRQ_HANDLED;
 }
 
 static int __init nrf24_mod_init(void)
 {
 	int irq_line;
+	int i;
+	printk(KERN_INFO "nrf24: Start initializing nRF24 device... \n");
 
-	printk(KERN_INFO "Start initializing nRF24 device... \n");
-	if (nrf24_check_device())
-	{
-		printk(KERN_INFO "nRF24 device not found \n");
-		return -1;
-	}	
-	
 	// allocate chrdev region
-
 	if (alloc_chrdev_region(&nrf24_device_number, 0, 1, DEVICE_NAME))
 	{
-		printk(KERN_INFO "Cannot allocate region for nrf24 device \n");
+		printk(KERN_INFO "nrf24: Cannot allocate region for nrf24 device \n");
 		return -1;
 	}
 
@@ -131,14 +125,14 @@ static int __init nrf24_mod_init(void)
 ;
 	if (!nrf24_devp)
 	{
-		printk(KERN_INFO "Bad kmalloc\n");
+		printk(KERN_INFO "nrf24: Bad kmalloc\n");
 		return -1;
 	}
 	mutex_init(&nrf24_devp->lock);
 
 	if (mutex_lock_interruptible(&nrf24_devp->lock))	
 	{
-		printk(KERN_INFO "nrf24 init interrupted \n");
+		printk(KERN_INFO "nrf24: Init interrupted \n");
 		return -1;
 	}
 	
@@ -148,7 +142,7 @@ static int __init nrf24_mod_init(void)
 	
 	// connect minor major number to cdev
  	if (cdev_add(&nrf24_devp->cdev, nrf24_device_number, 1)) {
-		printk(KERN_INFO "cdev add failed\n");
+		printk(KERN_INFO "nrf24: cdev add failed\n");
 		mutex_unlock(&nrf24_devp->lock);
 		return -1;
 	}
@@ -156,19 +150,17 @@ static int __init nrf24_mod_init(void)
 	// send uevent to udev
 	device_create(nrf24_class, NULL, nrf24_device_number, NULL, "nrf24d");
 	
-	// setup output pins	
+	// clear payload buffer	
 	nrf24_devp->busy=0;
-	nrf24_devp->data[0]='0';
-	nrf24_devp->data[1]='0';
-	nrf24_devp->data[2]='0';
-	nrf24_devp->data[3]='0';
+	for(i=0;i<32;i++)
+		nrf24_devp->payload_buffer[i]='0';
 
 	// set IRQ and MISO to input
 
 	if (gpio_direction_input(NRF24_GPIO_IRQ)!=0 ||
 		gpio_direction_input(NRF24_GPIO_MISO)!=0)
 	{
-		printk(KERN_INFO "Cannot set GPIO %i %i to input \n", NRF24_GPIO_IRQ, NRF24_GPIO_MISO);
+		printk(KERN_INFO "nrf24: Cannot set GPIO %i %i to input \n", NRF24_GPIO_IRQ, NRF24_GPIO_MISO);
 		mutex_unlock(&nrf24_devp->lock);
 		return -1;
 	}
@@ -179,7 +171,7 @@ static int __init nrf24_mod_init(void)
 		gpio_direction_output(NRF24_GPIO_CSN,1)!=0)
 
 	{
-		printk(KERN_INFO "Cannot set GPIO %i %i %i %i to output \n", NRF24_GPIO_CE, NRF24_GPIO_SCLK, NRF24_GPIO_MOSI, NRF24_GPIO_CSN);
+		printk(KERN_INFO "nrf24: Cannot set GPIO %i %i %i %i to output \n", NRF24_GPIO_CE, NRF24_GPIO_SCLK, NRF24_GPIO_MOSI, NRF24_GPIO_CSN);
 		mutex_unlock(&nrf24_devp->lock);
 		return -1;
 	}
@@ -187,23 +179,30 @@ static int __init nrf24_mod_init(void)
 	// request irq for GPIO 12
 
 	irq_line = gpio_to_irq(NRF24_GPIO_IRQ);
-	printk(KERN_INFO "IRQ line for GPIO %i is %i \n", NRF24_GPIO_IRQ, irq_line);
+	printk(KERN_INFO "nrf24: IRQ line for GPIO %i is %i \n", NRF24_GPIO_IRQ, irq_line);
 	
 	if (request_irq(irq_line, nrf24_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt nRF24 GPIO ", NULL)<0)
 	{
-		printk(KERN_INFO "Cannot get IRQ for GPIO %i \n", NRF24_GPIO_IRQ);
+		printk(KERN_INFO "nrf24: Cannot get IRQ for GPIO %i \n", NRF24_GPIO_IRQ);
 		mutex_unlock(&nrf24_devp->lock);
 		return -1;
 	}
-	
-	irq_counter = 0;
-	printk(KERN_INFO "nrf24 device initialized\n");
-
-	mutex_unlock(&nrf24_devp->lock);
-
 	gpio_set_value(NRF24_GPIO_CE, 0);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 	gpio_set_value(NRF24_GPIO_SCLK, 0);
+	if (nrf24_check_device())
+	{
+		printk(KERN_INFO "nrf24: Device not found \n");
+		mutex_unlock(&nrf24_devp->lock);
+		return -1;
+	}	
+	
+	irq_counter = 0;
+	nrf24_init_device();
+	printk(KERN_INFO "nrf24: Device initialized\n");
+
+	mutex_unlock(&nrf24_devp->lock);
+
 	return 0;
 }
 
@@ -225,7 +224,7 @@ static void __exit nrf24_mod_exit(void)
 
 	// destroy cmos class
 	class_destroy(nrf24_class);
-	printk(KERN_INFO "nrf24 exit done\n");
+	printk(KERN_INFO "nrf24: Exit done\n");
 
 	kfree(nrf24_devp);
 
@@ -235,25 +234,20 @@ static void __exit nrf24_mod_exit(void)
 static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * offset)
 {
 	struct nrf24_dev* nrf24_devp;
-	printk(KERN_INFO "nrf24 read started \n");
 	nrf24_devp=file->private_data;
 	
 	if (mutex_lock_interruptible(&nrf24_devp->lock))	
 	{
-		printk(KERN_INFO "nrf24 init interrupted \n");
+		printk(KERN_INFO "nrf24: Init interrupted \n");
 		return -1;
 	} 
 
-	nrf24_devp->data[0] = gpio_get_value(16)+48;
-	nrf24_devp->data[1] = gpio_get_value(20)+48;
-	nrf24_devp->data[2] = gpio_get_value(21)+48;
-	nrf24_devp->data[3] = gpio_get_value(26)+48;
 
-	if (copy_to_user(buf, (void*)nrf24_devp->data, 3)!=0)
+	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 3)!=0)
 	{
 		return -EIO;
 	}
-	printk(KERN_INFO "nrf24 count=%i\n",count);
+	printk(KERN_INFO "nrf24: Count=%i\n",count);
 	if (nrf24_devp->busy) {
 		nrf24_devp->busy=0;
 		return 0;
@@ -269,34 +263,62 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_t size, loff_t * offset)
 {
 	int i;
-	u8 ret=0;
-	char kbuf[4];
-	if (copy_from_user(kbuf, userp, 4)!=0)
+	u8 status;
+	int wait = 1000;
+	char payload[4];
+	if (copy_from_user(payload, userp, 4)!=0)
 		return -1;
 		
 	if (mutex_lock_interruptible(&nrf24_devp->lock))	
 	{
-		printk(KERN_INFO "gpio init interrupted \n");
+		printk(KERN_INFO "nrf24: Error, cannot lock device data \n");
 		return -1;
 	} 
 
 	nrf24_devp=filep->private_data;
 	for (i=0; i<4; i++)
-		nrf24_devp->data[i] = kbuf[i];
+		nrf24_devp->payload_buffer[i] = payload[i];
 
-	printk(KERN_INFO "kbuf[0] %i \n", kbuf[0]);	
+	printk(KERN_INFO "nrf24: Transmitting payload %i %i %i %i \n", 
+		payload[0], payload[1], payload[2], payload[3]);	
 
+	gpio_set_value(NRF24_GPIO_CE, 0);
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
 	ndelay(NRF24_SPI_HALF_CLK);
 
-	nrf24_send_byte(kbuf[0]);
-	ret = nrf24_send_byte(NRF24_CMD_NOP);
-	gpio_set_value(NRF24_GPIO_CSN, 1);
-	printk(KERN_INFO "MISO: %i\n", ret);
+	nrf24_send_byte(NRF24_CMD_W_TX_PAYLOAD);
+	for(i=0; i<4; i++)
+		nrf24_send_byte(payload[i]);
 
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+	gpio_set_value(NRF24_GPIO_CE, 1);
+
+	do {
+		status = nrf24_get_status();
+		if (status & 0x30)
+			break;
+		mdelay(1);
+	} while (wait--);
+
+	gpio_set_value(NRF24_GPIO_CE, 0);
+
+	if (!wait)
+	{
+		printk(KERN_INFO "nrf24: Transmit error, timeout \n");
+	}
+
+	if (status & 0x10)
+	{
+		printk(KERN_INFO "nrf24: Transmit error, max retry count reached \n");
+	} else 
+	if (status & 0x20)
+	{
+		printk(KERN_INFO "nrf24: Transmit success \n");
+	} else
+		printk(KERN_INFO "nrf24: Transmit error \n");
 	mutex_unlock(&nrf24_devp->lock);
-	return 2;
+	return 5;
 }
 
 static int nrf24_open(struct inode * node, struct file * file)
@@ -304,27 +326,70 @@ static int nrf24_open(struct inode * node, struct file * file)
 	struct nrf24_dev *nrf24_devp;
 	nrf24_devp = container_of(node->i_cdev, struct nrf24_dev, cdev);
 	file->private_data = nrf24_devp;
-	printk(KERN_INFO "nrf24 open done\n");
+	printk(KERN_INFO "nrf24: Open done\n");
 
 	return 0;
 }
 
 static int nrf24_release(struct inode * node, struct file * file)
 {
-	printk(KERN_INFO "nrf24 release done\n");
+	printk(KERN_INFO "nrf24: Release done\n");
 	return 0;
 }
 
 static int nrf24_check_device()
 {
 	u8 ret = 0;
+	ret = nrf24_get_status();
+	return (ret != NRF24_REG_STATUS_DEFAULT);
+}
+
+static int nrf24_get_status()
+{
+	u8 status = 0;
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
-
 	nrf24_send_byte(NRF24_CMD_R_REGISTER | NRF24_REG_STATUS);
-	ret = nrf24_send_byte(NRF24_CMD_NOP);
+	status = nrf24_send_byte(NRF24_CMD_NOP);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
-	return (ret != NRF24_REG_STATUS_DEFAULT);
+	return status;
+}
+
+static void nrf24_init_device()
+{
+	u8 status;
+	u8 config;
+	printk(KERN_INFO "nrf24: Using reset values: \n");
+	printk(KERN_INFO "nrf24: Primary TX \n");
+	printk(KERN_INFO "nrf24: CRC enabled, 1 byte \n");
+	printk(KERN_INFO "nrf24: Auto acknowledgement enabled for all pipes \n");
+	printk(KERN_INFO "nrf24: Enabled data pipe RX0 and data pipe RX1 \n");
+	printk(KERN_INFO "nrf24: Address width 5 bytes \n");
+	printk(KERN_INFO "nrf24: Auto retransmit delay: 250us, count: 3 \n");
+	printk(KERN_INFO "nrf24: RF channel: 2 (2402MHz) \n");
+	printk(KERN_INFO "nrf24: Air data rate 2Mbps \n");
+	printk(KERN_INFO "nrf24: Output power 0dBm \n");
+	printk(KERN_INFO "nrf24: Setup LNA gain \n");
+	printk(KERN_INFO "nrf24: RX Pipe 0 address: e7e7e7e7e7 \n");
+	printk(KERN_INFO "nrf24: RX Pipe 1 address: c2c2c2c2c2 \n");
+	printk(KERN_INFO "nrf24: RX Pipe 2 address: c3c3c3c3c3 \n");
+	printk(KERN_INFO "nrf24: RX Pipe 3 address: c4c4c4c4c4 \n");
+	printk(KERN_INFO "nrf24: RX Pipe 4 address: c5c5c5c5c5 \n");
+	printk(KERN_INFO "nrf24: RX Pipe 5 address: c6c6c6c6c6 \n");
+	printk(KERN_INFO "nrf24: TX Pipe address:   e7e7e7e7e7 \n");
+	printk(KERN_INFO "nrf24: Dynamic payload length disabled \n");
+
+	printk(KERN_INFO "nrf24: UClearing interrupt flags... \n");
+  status = nrf24_send_byte(NRF24_CMD_W_REGISTER & NRF24_REG_STATUS);
+	nrf24_send_byte(status | 0x70);	
+	
+	printk(KERN_INFO "nrf24: Set power up... \n");
+	
+	nrf24_send_byte(NRF24_CMD_R_REGISTER & NRF24_REG_CONFIG);
+	config = nrf24_send_byte(NRF24_CMD_NOP);
+	nrf24_send_byte(NRF24_CMD_W_REGISTER & NRF24_REG_CONFIG);
+	nrf24_send_byte(config | 2);
+	mdelay(2);
 }
 
 static u8 nrf24_send_byte(u8 value)
