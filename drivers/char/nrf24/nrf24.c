@@ -176,17 +176,6 @@ static int __init nrf24_mod_init(void)
 		return -1;
 	}
 
-	// request irq for GPIO 12
-
-	irq_line = gpio_to_irq(NRF24_GPIO_IRQ);
-	printk(KERN_INFO "nrf24: IRQ line for GPIO %i is %i \n", NRF24_GPIO_IRQ, irq_line);
-	
-	if (request_irq(irq_line, nrf24_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt nRF24 GPIO ", NULL)<0)
-	{
-		printk(KERN_INFO "nrf24: Cannot get IRQ for GPIO %i \n", NRF24_GPIO_IRQ);
-		mutex_unlock(&nrf24_devp->lock);
-		return -1;
-	}
 	gpio_set_value(NRF24_GPIO_CE, 0);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 	gpio_set_value(NRF24_GPIO_SCLK, 0);
@@ -196,13 +185,21 @@ static int __init nrf24_mod_init(void)
 		mutex_unlock(&nrf24_devp->lock);
 		return -1;
 	}	
+
+	// request irq for GPIO 12
+	irq_line = gpio_to_irq(NRF24_GPIO_IRQ);
+	printk(KERN_INFO "nrf24: IRQ line for GPIO %i is %i \n", NRF24_GPIO_IRQ, irq_line);
 	
+	if (request_irq(irq_line, nrf24_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt nRF24 GPIO ", NULL)<0)
+	{
+		printk(KERN_INFO "nrf24: Cannot get IRQ for GPIO %i \n", NRF24_GPIO_IRQ);
+		mutex_unlock(&nrf24_devp->lock);
+		return -1;
+	}
 	irq_counter = 0;
 	nrf24_init_device();
 	printk(KERN_INFO "nrf24: Device initialized\n");
-
 	mutex_unlock(&nrf24_devp->lock);
-
 	return 0;
 }
 
@@ -301,6 +298,9 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 		mdelay(1);
 	} while (wait--);
 
+
+	printk(KERN_INFO "nrf24: status %i \n", status);
+	printk(KERN_INFO "nrf24: wait   %i \n", wait);
 	gpio_set_value(NRF24_GPIO_CE, 0);
 
 	if (!wait)
