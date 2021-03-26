@@ -9,6 +9,7 @@
 #include <asm/io.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
+#include <linux/nrf24.h>
 
 #define DEVICE_NAME "nrf24-device"
 
@@ -85,6 +86,7 @@ static long nrf24_ioctl(struct file*, unsigned int, unsigned long);
 static void nrf24_init_device(void);
 static int 	nrf24_check_device(void);
 static int 	nrf24_get_status(void);
+static void nrf24_write_register(u8 register, u8 value, u8 mask);
 static u8 	nrf24_send_byte(u8 value);
 
 static struct file_operations nrf24_fops = {
@@ -332,7 +334,6 @@ static int nrf24_open(struct inode * node, struct file * file)
 
 	return 0;
 }
-
 static int nrf24_release(struct inode * node, struct file * file)
 {
 	printk(KERN_INFO "nrf24: Release done\n");
@@ -341,7 +342,23 @@ static int nrf24_release(struct inode * node, struct file * file)
 
 static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
+	//u8 ret = 0;
 	printk(KERN_INFO "nrf24: ioctl command: %iu argument %lu \n", cmd, arg);
+	switch (cmd)
+	{
+		case NRF24_SET_PRIM_RX:
+			nrf24_write_register(NRF24_REG_CONFIG, 1, 1); 
+			
+			break;
+
+		case NRF24_SET_PRIM_TX:
+			nrf24_write_register(NRF24_REG_CONFIG, 0, 1);
+			break;
+		
+		default:
+			break;
+	}
+
 	return 0;
 }
 
@@ -398,6 +415,18 @@ static int nrf24_get_status()
 	status = nrf24_send_byte(NRF24_CMD_NOP);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 	return status;
+}
+
+static void nrf24_write_register(u8 reg, u8 value, u8 mask)
+{
+	u8 ret;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_R_REGISTER & reg);	  	
+	ret = nrf24_send_byte(NRF24_CMD_NOP);
+	nrf24_send_byte(NRF24_CMD_W_REGISTER & reg);
+	nrf24_send_byte((ret & ~mask) | value);
+	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
 
 static u8 nrf24_send_byte(u8 value)
