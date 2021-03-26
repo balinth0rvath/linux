@@ -80,18 +80,20 @@ static ssize_t nrf24_read(struct file*, char*, size_t, loff_t*);
 static ssize_t nrf24_write(struct file *, const char __user *, size_t, loff_t *);
 static int nrf24_open(struct inode *, struct file *);
 static int nrf24_release(struct inode *, struct file *);
-static int nrf24_get_status(void);
-static int nrf24_check_device(void);
-static void nrf24_init_device(void);
+static long nrf24_ioctl(struct file*, unsigned int, unsigned long);
 
-static u8 nrf24_send_byte(u8 value);
+static void nrf24_init_device(void);
+static int 	nrf24_check_device(void);
+static int 	nrf24_get_status(void);
+static u8 	nrf24_send_byte(u8 value);
 
 static struct file_operations nrf24_fops = {
 	.owner = THIS_MODULE,	/* Owner */
 	.read = nrf24_read,
 	.write = nrf24_write,
 	.open = nrf24_open,
-	.release = nrf24_release
+	.release = nrf24_release,
+	.unlocked_ioctl = nrf24_ioctl
 };
 
 static dev_t nrf24_device_number;
@@ -337,22 +339,10 @@ static int nrf24_release(struct inode * node, struct file * file)
 	return 0;
 }
 
-static int nrf24_check_device()
+static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
-	u8 ret = 0;
-	ret = nrf24_get_status();
-	return (ret != NRF24_REG_STATUS_DEFAULT);
-}
-
-static int nrf24_get_status()
-{
-	u8 status = 0;
-	gpio_set_value(NRF24_GPIO_CSN, 0);
-	ndelay(NRF24_SPI_HALF_CLK);
-	nrf24_send_byte(NRF24_CMD_R_REGISTER | NRF24_REG_STATUS);
-	status = nrf24_send_byte(NRF24_CMD_NOP);
-	gpio_set_value(NRF24_GPIO_CSN, 1);
-	return status;
+	printk(KERN_INFO "nrf24: ioctl command: %iu argument %lu \n", cmd, arg);
+	return 0;
 }
 
 static void nrf24_init_device()
@@ -390,6 +380,24 @@ static void nrf24_init_device()
 	nrf24_send_byte(NRF24_CMD_W_REGISTER & NRF24_REG_CONFIG);
 	nrf24_send_byte(config | 2);
 	mdelay(2);
+}
+
+static int nrf24_check_device()
+{
+	u8 ret = 0;
+	ret = nrf24_get_status();
+	return (ret != NRF24_REG_STATUS_DEFAULT);
+}
+
+static int nrf24_get_status()
+{
+	u8 status = 0;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_R_REGISTER | NRF24_REG_STATUS);
+	status = nrf24_send_byte(NRF24_CMD_NOP);
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+	return status;
 }
 
 static u8 nrf24_send_byte(u8 value)
