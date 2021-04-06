@@ -84,8 +84,10 @@ static int nrf24_release(struct inode *, struct file *);
 static long nrf24_ioctl(struct file*, unsigned int, unsigned long);
 
 static void nrf24_init_device(void);
+static void nrf24_show_status(void);
 static int 	nrf24_check_device(void);
-static int 	nrf24_get_status(void);
+static int nrf24_get_register(u8 reg);
+static void nrf24_get_address_register(u8 reg, u8* result);
 static void nrf24_write_register(u8 register, u8 value, u8 mask);
 static u8 	nrf24_send_byte(u8 value);
 
@@ -112,7 +114,7 @@ static int __init nrf24_mod_init(void)
 {
 	int irq_line;
 	int i;
-	printk(KERN_INFO "nrf24: Start initializing nRF24 device... \n");
+	printk(KERN_INFO " ------------ \nnrf24: Start initializing nRF24 device... \n");
 
 	// allocate chrdev region
 	if (alloc_chrdev_region(&nrf24_device_number, 0, 1, DEVICE_NAME))
@@ -203,6 +205,7 @@ static int __init nrf24_mod_init(void)
 	irq_counter = 0;
 	nrf24_init_device();
 	printk(KERN_INFO "nrf24: Device initialized\n");
+	nrf24_show_status();
 	mutex_unlock(&nrf24_devp->lock);
 	return 0;
 }
@@ -296,7 +299,7 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	gpio_set_value(NRF24_GPIO_CE, 1);
 
 	do {
-		status = nrf24_get_status();
+		status = nrf24_get_register(NRF24_REG_STATUS);
 		if (status & 0x30)
 			break;
 		mdelay(1);
@@ -362,60 +365,164 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
+static void nrf24_show_status()
+{
+	u8 regvalue;
+	u8 result[5];
+	printk(KERN_INFO "nrf24: register summary \n");
+
+	regvalue = nrf24_get_register(NRF24_REG_CONFIG);
+	if (regvalue & 0x1)
+		printk(KERN_INFO "nrf24: Primary RX \n");
+	else
+		printk(KERN_INFO "nrf24: Primary TX \n");
+	if (regvalue & 0x2)
+		printk(KERN_INFO "nrf24: Power up \n");
+	else
+		printk(KERN_INFO "nrf24: Power down \n");
+	if (regvalue & 0x8)	
+		printk(KERN_INFO "nrf24: CRC enabled \n");
+	else
+		printk(KERN_INFO "nrf24: CRC disabled \n");
+
+	if (regvalue & 0x4)	
+		printk(KERN_INFO "nrf24: CRC 2 bytes \n");
+	else
+		printk(KERN_INFO "nrf24: CRC 1 byte \n");
+
+	regvalue = nrf24_get_register(NRF24_REG_EN_AA);
+	printk(KERN_INFO "nrf24: Auto acknowledgement enabled: %x \n", regvalue);
+
+	regvalue = nrf24_get_register(NRF24_REG_EN_RXADDR);
+	printk(KERN_INFO "nrf24: Enabled data pipes: %x \n", regvalue);
+
+	regvalue = nrf24_get_register(NRF24_REG_SETUP_AW);
+	printk(KERN_INFO "nrf24: Address width %i bytes \n", regvalue + 2);
+
+	regvalue = nrf24_get_register(NRF24_REG_SETUP_RETR);
+	printk(KERN_INFO "nrf24: Auto retransmit delay: %i, count: %i \n", 
+		((regvalue >> 4)+1) * 250, regvalue & 0x0f );
+
+	regvalue = nrf24_get_register(NRF24_REG_RF_CH);
+	printk(KERN_INFO "nrf24: RF channel: %i (%iMHz) \n", regvalue, regvalue + 2400);
+
+	regvalue = nrf24_get_register(NRF24_REG_RF_SETUP);
+	if (regvalue & 0x10)
+		printk(KERN_INFO "nrf24: Force PLL lock \n");
+	else
+		printk(KERN_INFO "nrf24: Don't force PLL lock \n");
+
+	if (regvalue & 0x8)
+		printk(KERN_INFO "nrf24: Air data rate 2Mbps \n");
+	else
+		printk(KERN_INFO "nrf24: Air data rate 1Mbps \n");
+
+	printk(KERN_INFO "nrf24: Output power in TX mode: %idBm \n", 
+		-6 * (3 - ((regvalue & 6) >> 1)) );
+		
+	if (regvalue & 0x1)
+		printk(KERN_INFO "nrf24: Setup LNA gain \n");
+	else
+		printk(KERN_INFO "nrf24: Don't setup LNA gain \n");
+
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P0, result);
+	printk(KERN_INFO "nrf24: RX Pipe 0 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P1, result);
+	printk(KERN_INFO "nrf24: RX Pipe 1 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P2, result);
+	printk(KERN_INFO "nrf24: RX Pipe 2 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P3, result);
+	printk(KERN_INFO "nrf24: RX Pipe 3 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P4, result);
+	printk(KERN_INFO "nrf24: RX Pipe 4 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+	nrf24_get_address_register(NRF24_REG_RX_ADDR_P5, result);
+	printk(KERN_INFO "nrf24: RX Pipe 5 address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+	nrf24_get_address_register(NRF24_REG_TX_ADDR, result);
+	printk(KERN_INFO "nrf24: TX address: %x:%x:%x:%x:%x \n",
+		result[0],
+		result[1],
+		result[2],
+		result[3],
+		result[4]);
+
+	regvalue = nrf24_get_register(NRF24_REG_DYNPD);
+	printk(KERN_INFO "nrf24: Dynamic payload length %x \n", regvalue);
+}
+
 static void nrf24_init_device()
 {
-	u8 status;
-	u8 config;
-	printk(KERN_INFO "nrf24: Using reset values: \n");
-	printk(KERN_INFO "nrf24: Primary TX \n");
-	printk(KERN_INFO "nrf24: CRC enabled, 1 byte \n");
-	printk(KERN_INFO "nrf24: Auto acknowledgement enabled for all pipes \n");
-	printk(KERN_INFO "nrf24: Enabled data pipe RX0 and data pipe RX1 \n");
-	printk(KERN_INFO "nrf24: Address width 5 bytes \n");
-	printk(KERN_INFO "nrf24: Auto retransmit delay: 250us, count: 3 \n");
-	printk(KERN_INFO "nrf24: RF channel: 2 (2402MHz) \n");
-	printk(KERN_INFO "nrf24: Air data rate 2Mbps \n");
-	printk(KERN_INFO "nrf24: Output power 0dBm \n");
-	printk(KERN_INFO "nrf24: Setup LNA gain \n");
-	printk(KERN_INFO "nrf24: RX Pipe 0 address: e7e7e7e7e7 \n");
-	printk(KERN_INFO "nrf24: RX Pipe 1 address: c2c2c2c2c2 \n");
-	printk(KERN_INFO "nrf24: RX Pipe 2 address: c3c3c3c3c3 \n");
-	printk(KERN_INFO "nrf24: RX Pipe 3 address: c4c4c4c4c4 \n");
-	printk(KERN_INFO "nrf24: RX Pipe 4 address: c5c5c5c5c5 \n");
-	printk(KERN_INFO "nrf24: RX Pipe 5 address: c6c6c6c6c6 \n");
-	printk(KERN_INFO "nrf24: TX Pipe address:   e7e7e7e7e7 \n");
-	printk(KERN_INFO "nrf24: Dynamic payload length disabled \n");
-
-	printk(KERN_INFO "nrf24: UClearing interrupt flags... \n");
-  status = nrf24_send_byte(NRF24_CMD_W_REGISTER & NRF24_REG_STATUS);
-	nrf24_send_byte(status | 0x70);	
+	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
+  nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 	
 	printk(KERN_INFO "nrf24: Set power up... \n");
-	
-	nrf24_send_byte(NRF24_CMD_R_REGISTER & NRF24_REG_CONFIG);
-	config = nrf24_send_byte(NRF24_CMD_NOP);
-	nrf24_send_byte(NRF24_CMD_W_REGISTER & NRF24_REG_CONFIG);
-	nrf24_send_byte(config | 2);
+	nrf24_write_register(NRF24_REG_CONFIG,0x2,0x2);
 	mdelay(2);
 }
 
 static int nrf24_check_device()
 {
 	u8 ret = 0;
-	ret = nrf24_get_status();
+	ret = nrf24_get_register(NRF24_REG_STATUS);
 	return (ret != NRF24_REG_STATUS_DEFAULT);
 }
 
-static int nrf24_get_status()
+
+static int nrf24_get_register(u8 reg)
 {
-	u8 status = 0;
+	u8 ret = 0;
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
-	nrf24_send_byte(NRF24_CMD_R_REGISTER | NRF24_REG_STATUS);
-	status = nrf24_send_byte(NRF24_CMD_NOP);
+	nrf24_send_byte(NRF24_CMD_R_REGISTER | reg);
+	ret = nrf24_send_byte(NRF24_CMD_NOP);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
-	return status;
+	return ret;
+
 }
+
+static void nrf24_get_address_register(u8 reg, u8* result)
+{
+	int i;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_R_REGISTER | reg);
+	for(i=0;i<5;i++)
+	{
+		 *(result + i) = nrf24_send_byte(NRF24_CMD_NOP);
+	}
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+}
+
 
 static void nrf24_write_register(u8 reg, u8 value, u8 mask)
 {
