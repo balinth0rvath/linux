@@ -203,6 +203,9 @@ static int __init nrf24_mod_init(void)
 		return -1;
 	}
 	irq_counter = 0;
+
+	printk(KERN_INFO "nrf24: reset status:\n");
+	nrf24_show_status();
 	nrf24_init_device();
 	printk(KERN_INFO "nrf24: Device initialized\n");
 	nrf24_show_status();
@@ -318,13 +321,17 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	if (status & 0x10)
 	{
 		printk(KERN_INFO "nrf24: Transmit error, max retry count reached \n");
+		nrf24_write_register(NRF24_REG_STATUS, 0x30, 0x30);
 	} else 
 	if (status & 0x20)
 	{
 		printk(KERN_INFO "nrf24: Transmit success \n");
+
 	} else
 		printk(KERN_INFO "nrf24: Transmit error \n");
 	mutex_unlock(&nrf24_devp->lock);
+	printk(KERN_INFO "nrf24: MAX_RT,TX_DS cleared \n");
+	nrf24_write_register(NRF24_REG_STATUS, 0x30, 0x30);
 	return 5;
 }
 
@@ -531,7 +538,13 @@ static void nrf24_write_register(u8 reg, u8 value, u8 mask)
 	ndelay(NRF24_SPI_HALF_CLK);
 	nrf24_send_byte(NRF24_CMD_R_REGISTER & reg);	  	
 	ret = nrf24_send_byte(NRF24_CMD_NOP);
-	nrf24_send_byte(NRF24_CMD_W_REGISTER & reg);
+
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+	ndelay(NRF24_SPI_HALF_CLK);
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+
+	nrf24_send_byte(NRF24_CMD_W_REGISTER | reg);
 	nrf24_send_byte((ret & ~mask) | value);
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
