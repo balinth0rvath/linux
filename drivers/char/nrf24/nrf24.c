@@ -89,7 +89,10 @@ static int 	nrf24_check_device(void);
 static int nrf24_get_register(u8 reg);
 static void nrf24_get_address_register(u8 reg, u8* result);
 static void nrf24_write_register(u8 register, u8 value, u8 mask);
+static void nrf24_write_payload(char* payload);
+static void nrf24_flush_tx(void);
 static u8 	nrf24_send_byte(u8 value);
+static void nrf24_transmit_packet(char* payload, u8* status, int* wait);
 
 static struct file_operations nrf24_fops = {
 	.owner = THIS_MODULE,	/* Owner */
@@ -289,30 +292,10 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	printk(KERN_INFO "nrf24: Transmitting payload %i %i %i %i \n", 
 		payload[0], payload[1], payload[2], payload[3]);	
 
-	gpio_set_value(NRF24_GPIO_CE, 0);
-	gpio_set_value(NRF24_GPIO_CSN, 0);
-	ndelay(NRF24_SPI_HALF_CLK);
-	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_transmit_packet(payload, &status, &wait);
 
-	nrf24_send_byte(NRF24_CMD_W_TX_PAYLOAD);
-	for(i=0; i<4; i++)
-		nrf24_send_byte(payload[i]);
-
-	gpio_set_value(NRF24_GPIO_CSN, 1);
-	gpio_set_value(NRF24_GPIO_CE, 1);
-
-	do {
-		status = nrf24_get_register(NRF24_REG_STATUS);
-		if (status & 0x30)
-			break;
-		mdelay(1);
-	} while (wait--);
-
-
-	printk(KERN_INFO "nrf24: status %i \n", status);
-	printk(KERN_INFO "nrf24: wait   %i \n", wait);
-	gpio_set_value(NRF24_GPIO_CE, 0);
-
+	status = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "nrf24: status value after clearing IRQs %x \n", status);
 	if (!wait)
 	{
 		printk(KERN_INFO "nrf24: Transmit error, timeout \n");
@@ -321,7 +304,6 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	if (status & 0x10)
 	{
 		printk(KERN_INFO "nrf24: Transmit error, max retry count reached \n");
-		nrf24_write_register(NRF24_REG_STATUS, 0x30, 0x30);
 	} else 
 	if (status & 0x20)
 	{
@@ -330,9 +312,37 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	} else
 		printk(KERN_INFO "nrf24: Transmit error \n");
 	mutex_unlock(&nrf24_devp->lock);
-	printk(KERN_INFO "nrf24: MAX_RT,TX_DS cleared \n");
-	nrf24_write_register(NRF24_REG_STATUS, 0x30, 0x30);
 	return 5;
+}
+
+static void nrf24_transmit_packet(char* payload, u8* status, int* wait)
+{
+	
+	*status = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "nrf24: status value before sending payload %x \n", *status);
+	gpio_set_value(NRF24_GPIO_CE, 0);
+	nrf24_write_payload(payload);
+	gpio_set_value(NRF24_GPIO_CE, 1);
+	do {
+		*status = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "nrf24: status %x \n", *status);
+		if (*status & 0x30)
+			break;
+	} while ((*wait)--);
+
+	printk(KERN_INFO "nrf24: status %x \n", *status);
+	printk(KERN_INFO "nrf24: wait   %i \n", *wait);
+	gpio_set_value(NRF24_GPIO_CE, 0);
+	printk(KERN_INFO "nrf24: Flush TX FIFO \n");
+	
+	*status = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "nrf24: status value before flush %x \n", *status);
+	nrf24_flush_tx();
+	*status = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "nrf24: status value after flush %x \n", *status);
+	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
+  nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
+
 }
 
 static int nrf24_open(struct inode * node, struct file * file)
@@ -489,9 +499,13 @@ static void nrf24_show_status()
 
 static void nrf24_init_device()
 {
+	printk(KERN_INFO "nrf24: Flush TX FIFO \n");
+	nrf24_flush_tx();
 	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
   nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-	
+	nrf24_write_register(NRF24_REG_RF_CH, 100,0x7f);
+	nrf24_write_register(NRF24_REG_SETUP_RETR, 0xff, 0xff);	
+
 	printk(KERN_INFO "nrf24: Set power up... \n");
 	nrf24_write_register(NRF24_REG_CONFIG,0x2,0x2);
 	mdelay(2);
@@ -546,6 +560,28 @@ static void nrf24_write_register(u8 reg, u8 value, u8 mask)
 
 	nrf24_send_byte(NRF24_CMD_W_REGISTER | reg);
 	nrf24_send_byte((ret & ~mask) | value);
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+}
+
+static void nrf24_write_payload(char* payload)
+{
+	int i;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_W_TX_PAYLOAD);	  	
+	for(i=0; i<4; i++)
+	{
+		nrf24_send_byte(*(payload+i));
+		printk(KERN_INFO "nrf24: sent: %c\n", *(payload+i));
+	}
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+}
+
+static void nrf24_flush_tx(void)
+{
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_FLUSH_TX);	  	
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
 
