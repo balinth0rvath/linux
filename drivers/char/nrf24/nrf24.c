@@ -93,6 +93,7 @@ static void nrf24_write_payload(char* payload);
 static void nrf24_flush_tx(void);
 static u8 	nrf24_send_byte(u8 value);
 static void nrf24_transmit_packet(char* payload, u8* status, int* wait);
+static void nrf24_read_payload(void);
 
 static struct file_operations nrf24_fops = {
 	.owner = THIS_MODULE,	/* Owner */
@@ -251,7 +252,12 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 		printk(KERN_INFO "nrf24: Init interrupted \n");
 		return -1;
 	} 
-
+	
+	if (!(nrf24_get_register(NRF24_REG_FIFO_STATUS) & 1))
+	{
+		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
+		nrf24_read_payload();
+	}
 
 	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 3)!=0)
 	{
@@ -268,6 +274,21 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	}	
 	mutex_unlock(&nrf24_devp->lock);
 	return 2;
+}
+
+static void nrf24_read_payload()
+{
+	int i;
+	int ret;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_R_RX_PAYLOAD);
+	for(i=0; i<4; i++)
+	{
+		ret = nrf24_send_byte(NRF24_CMD_NOP);
+		nrf24_devp->payload_buffer[i]=ret;
+	}
+	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
 
 static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_t size, loff_t * offset)
