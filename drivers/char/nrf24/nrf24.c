@@ -21,7 +21,7 @@
 #define NRF24_GPIO_SCLK								20								// GPIO20
 #define NRF24_GPIO_MOSI								21								// GPIO21
 #define NRF24_GPIO_CSN								26								// GPIO26
-#define NRF24_GPIO_IRQ	 							12								// GPIO12
+#define NRF24_GPIO_IRQ	 							13								// GPIO13
 #define NRF24_GPIO_MISO								19								// GPIO19
 #define NRF24_SPI_HALF_CLK						500								// SCLK half period ns
 
@@ -118,6 +118,8 @@ static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
+	nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
+	nrf24_read_payload();
 	return IRQ_HANDLED;
 }
 
@@ -125,7 +127,7 @@ static int __init nrf24_mod_init(void)
 {
 	int irq_line;
 	int i;
-	printk(KERN_INFO " ------------ \nnrf24: Start initializing nRF24 device... \n");
+	printk(KERN_INFO " ---------------------------------- \n***** nrf24: Start initializing nRF24 device... *****\n");
 
 	// allocate chrdev region
 	if (alloc_chrdev_region(&nrf24_device_number, 0, 1, DEVICE_NAME))
@@ -203,7 +205,6 @@ static int __init nrf24_mod_init(void)
 		return -1;
 	}	
 
-	// request irq for GPIO 12
 	irq_line = gpio_to_irq(NRF24_GPIO_IRQ);
 	printk(KERN_INFO "nrf24: IRQ line for GPIO %i is %i \n", NRF24_GPIO_IRQ, irq_line);
 	
@@ -215,8 +216,6 @@ static int __init nrf24_mod_init(void)
 	}
 	irq_counter = 0;
 
-	printk(KERN_INFO "nrf24: reset status:\n");
-	nrf24_show_status();
 	nrf24_init_device();
 	printk(KERN_INFO "nrf24: Device initialized\n");
 	nrf24_show_status();
@@ -251,7 +250,6 @@ static void __exit nrf24_mod_exit(void)
 
 static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * offset)
 {
-	int i=15;
 	struct nrf24_dev* nrf24_devp;
 	nrf24_devp=file->private_data;
 	
@@ -262,26 +260,16 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	} 
 
 	printk(KERN_INFO "read started\n");	
-	while(i)
-	{
-		mdelay(500);
-		
-		printk(KERN_INFO "waiting %i \n",i);	
-		i--;
-	
-		if (!(nrf24_get_register(NRF24_REG_FIFO_STATUS) & 1))
-		{
-			printk(KERN_INFO "fifo got \n");	
-			
-			nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-			nrf24_read_payload();
-		}
-	}
 
-	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 3)!=0)
+	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[0]);	
+	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[1]);	
+	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[2]);	
+	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[3]);	
+	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 4)!=0)
 	{
 		return -EIO;
 	}
+	
 	printk(KERN_INFO "nrf24: Count=%i\n",count);
 	if (nrf24_devp->busy) {
 		nrf24_devp->busy=0;
@@ -289,10 +277,10 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	} else
 	{
 		nrf24_devp->busy=1;
-		return 2;
+		return 4;
 	}	
 	mutex_unlock(&nrf24_devp->lock);
-	return 2;
+	return 4;
 }
 
 
@@ -417,8 +405,7 @@ static void nrf24_show_status()
 {
 	u8 regvalue;
 	u8 result[5];
-	printk(KERN_INFO "nrf24: register summary \n");
-
+	printk(KERN_INFO " ---------------------------------- \n***** nrf24: Register summary *****\n");
 	regvalue = nrf24_get_register(NRF24_REG_CONFIG);
 	if (regvalue & 0x1)
 		printk(KERN_INFO "nrf24: Primary RX \n");
