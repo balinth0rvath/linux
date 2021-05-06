@@ -116,10 +116,21 @@ struct class* nrf24_class;
 
 static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
+	int stat=0;
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
 	nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 	nrf24_read_payload();
+	nrf24_flush_rx();
+	nrf24_flush_tx();
+  /*
+	stat = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "REG STATUS %x\n", stat);
+
+	stat = nrf24_get_register(NRF24_REG_FIFO_STATUS);
+	printk(KERN_INFO "REG FIFO STATUS %x\n", stat);
+	nrf24_show_status();
+  */
 	return IRQ_HANDLED;
 }
 
@@ -250,6 +261,7 @@ static void __exit nrf24_mod_exit(void)
 
 static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * offset)
 {
+	int stat=0;
 	struct nrf24_dev* nrf24_devp;
 	nrf24_devp=file->private_data;
 	
@@ -260,11 +272,11 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	} 
 
 	printk(KERN_INFO "read started\n");	
+	stat = nrf24_get_register(NRF24_REG_STATUS);
+	printk(KERN_INFO "REG STATUS %x\n", stat);
 
-	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[0]);	
-	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[1]);	
-	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[2]);	
-	printk(KERN_INFO "%i \n", nrf24_devp->payload_buffer[3]);	
+	stat = nrf24_get_register(NRF24_REG_FIFO_STATUS);
+	printk(KERN_INFO "REG FIFO STATUS %x\n", stat);
 	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 4)!=0)
 	{
 		return -EIO;
@@ -628,7 +640,7 @@ static void nrf24_write_register(u8 reg, u8 value, u8 mask)
 	u8 ret;
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
-	nrf24_send_byte(NRF24_CMD_R_REGISTER & reg);	  	
+	nrf24_send_byte(NRF24_CMD_R_REGISTER | reg);	  	
 	ret = nrf24_send_byte(NRF24_CMD_NOP);
 
 	gpio_set_value(NRF24_GPIO_CSN, 1);
