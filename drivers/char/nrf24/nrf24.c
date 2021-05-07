@@ -116,21 +116,22 @@ struct class* nrf24_class;
 
 static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
-	int stat=0;
+	int ret;
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
-	nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-	nrf24_read_payload();
-	nrf24_flush_rx();
-	nrf24_flush_tx();
-  /*
-	stat = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "REG STATUS %x\n", stat);
+	ret = nrf24_get_register(NRF24_REG_STATUS);	
 
-	stat = nrf24_get_register(NRF24_REG_FIFO_STATUS);
-	printk(KERN_INFO "REG FIFO STATUS %x\n", stat);
-	nrf24_show_status();
-  */
+	if (ret & 0x40)
+	{
+		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
+		nrf24_read_payload();
+		printk(KERN_INFO "nrf24: IRQ trigger: Packet received\n"); 
+	}
+
+	if (ret & 0x20)
+	{
+		printk(KERN_INFO "nrf24: IRQ trigger: Packet sent\n"); 
+	}
 	return IRQ_HANDLED;
 }
 
@@ -138,7 +139,7 @@ static int __init nrf24_mod_init(void)
 {
 	int irq_line;
 	int i;
-	printk(KERN_INFO " ---------------------------------- \n***** nrf24: Start initializing nRF24 device... *****\n");
+	printk(KERN_INFO "nrf24: Start initializing nRF24 device...\n");
 
 	// allocate chrdev region
 	if (alloc_chrdev_region(&nrf24_device_number, 0, 1, DEVICE_NAME))
@@ -320,8 +321,6 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 
 	nrf24_transmit_packet(payload, &status, &wait);
 
-	status = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "nrf24: status value after clearing IRQs %x \n", status);
 	if (!wait)
 	{
 		printk(KERN_INFO "nrf24: Transmit error, timeout \n");
@@ -337,6 +336,9 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 
 	} else
 		printk(KERN_INFO "nrf24: Transmit error \n");
+
+	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
+  nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 	mutex_unlock(&nrf24_devp->lock);
 	return 5;
 }
@@ -417,7 +419,7 @@ static void nrf24_show_status()
 {
 	u8 regvalue;
 	u8 result[5];
-	printk(KERN_INFO " ---------------------------------- \n***** nrf24: Register summary *****\n");
+	printk(KERN_INFO "nrf24: Register summary\n");
 	regvalue = nrf24_get_register(NRF24_REG_CONFIG);
 	if (regvalue & 0x1)
 		printk(KERN_INFO "nrf24: Primary RX \n");
@@ -537,31 +539,15 @@ static int nrf24_check_device()
 
 static void nrf24_transmit_packet(char* payload, u8* status, int* wait)
 {
-	
-	*status = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "nrf24: status value before sending payload %x \n", *status);
 	gpio_set_value(NRF24_GPIO_CE, 0);
 	nrf24_write_payload(payload);
 	gpio_set_value(NRF24_GPIO_CE, 1);
 	do {
 		*status = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "nrf24: status %x \n", *status);
 		if (*status & 0x30)
 			break;
 	} while ((*wait)--);
-
-	printk(KERN_INFO "nrf24: status %x \n", *status);
-	printk(KERN_INFO "nrf24: wait   %i \n", *wait);
 	gpio_set_value(NRF24_GPIO_CE, 0);
-	printk(KERN_INFO "nrf24: Flush TX FIFO \n");
-	
-	*status = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "nrf24: status value before flush %x \n", *status);
-	nrf24_flush_tx();
-	*status = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "nrf24: status value after flush %x \n", *status);
-	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
-  nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 }
 
 static void nrf24_read_payload()
@@ -630,7 +616,6 @@ static void nrf24_write_payload(char* payload)
 	for(i=0; i<4; i++)
 	{
 		nrf24_send_byte(*(payload+i));
-		printk(KERN_INFO "nrf24: sent: %c\n", *(payload+i));
 	}
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
