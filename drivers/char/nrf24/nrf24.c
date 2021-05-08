@@ -14,7 +14,7 @@
 #define DEVICE_NAME "nrf24-device"
 
 // TODO via IOCTL
-#define NRF24_SET_RECEIVER						1
+#define NRF24_SET_RECEIVER						0
 
 // GPIO pin settings 
 #define NRF24_GPIO_CE 								16								// GPIO16
