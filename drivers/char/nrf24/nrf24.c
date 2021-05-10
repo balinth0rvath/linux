@@ -14,7 +14,8 @@
 #define DEVICE_NAME "nrf24-device"
 
 // TODO via IOCTL
-#define NRF24_SET_RECEIVER						0
+#define NRF24_SET_RECEIVER						1
+#define NRF24_PAYLOAD_BUFFER_LENGTH		128
 
 // GPIO pin settings 
 #define NRF24_GPIO_CE 								16								// GPIO16
@@ -69,16 +70,27 @@
 
 #define NRF24_REG_STATUS_DEFAULT			0x0e
 
+typedef struct {
+	u8 id;
+	u8 source_address;
+	u8 value;
+	u8 aux;
+} nrf24_payload_buffer_item_t;
+	
+
 /* Per device structure */
 struct nrf24_dev {
-	char payload_buffer[32];
+	nrf24_payload_buffer_item_t payload_buffer_list[NRF24_PAYLOAD_BUFFER_LENGTH];
+	u8 item_index;
 	struct cdev cdev;
 	char name[10];
 	int busy;
 	struct mutex lock;   
+	spinlock_t spinlock;
 } * nrf24_devp;
 
 int irq_counter;
+static u8 item_index;
 
 static ssize_t nrf24_read(struct file*, char*, size_t, loff_t*);
 static ssize_t nrf24_write(struct file *, const char __user *, size_t, loff_t *);
@@ -124,7 +136,9 @@ static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 	if (ret & 0x40)
 	{
 		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
+		spin_lock(&nrf24_devp->spinlock);
 		nrf24_read_payload();
+		spin_unlock(&nrf24_devp->spinlock);
 		printk(KERN_INFO "nrf24: IRQ trigger: Packet received\n"); 
 	}
 
@@ -183,9 +197,14 @@ static int __init nrf24_mod_init(void)
 	
 	// clear payload buffer	
 	nrf24_devp->busy=0;
-	for(i=0;i<32;i++)
-		nrf24_devp->payload_buffer[i]='0';
-
+	for(i=0; i<NRF24_PAYLOAD_BUFFER_LENGTH; i++)
+	{
+		nrf24_devp->payload_buffer_list[i].id=0;
+		nrf24_devp->payload_buffer_list[i].source_address=0;
+		nrf24_devp->payload_buffer_list[i].value=0;
+		nrf24_devp->payload_buffer_list[i].aux=0;
+	
+	}
 	// set IRQ and MISO to input
 
 	if (gpio_direction_input(NRF24_GPIO_IRQ)!=0 ||
@@ -278,7 +297,7 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 
 	stat = nrf24_get_register(NRF24_REG_FIFO_STATUS);
 	printk(KERN_INFO "REG FIFO STATUS %x\n", stat);
-	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer, 4)!=0)
+	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer_list, 4)!=0)
 	{
 		return -EIO;
 	}
@@ -299,7 +318,6 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 
 static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_t size, loff_t * offset)
 {
-	int i;
 	u8 status;
 	int wait = 1000;
 	char payload[4];
@@ -313,9 +331,6 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	} 
 
 	nrf24_devp=filep->private_data;
-	for (i=0; i<4; i++)
-		nrf24_devp->payload_buffer[i] = payload[i];
-
 	printk(KERN_INFO "nrf24: Transmitting payload %i %i %i %i \n", 
 		payload[0], payload[1], payload[2], payload[3]);	
 
@@ -554,15 +569,26 @@ static void nrf24_read_payload()
 {
 	int i;
 	int ret;
+	char payload_buffer[NRF24_PAYLOAD_BUFFER_LENGTH];
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
 	nrf24_send_byte(NRF24_CMD_R_RX_PAYLOAD);
 	for(i=0; i<4; i++)
 	{
 		ret = nrf24_send_byte(NRF24_CMD_NOP);
-		nrf24_devp->payload_buffer[i]=ret;
+		payload_buffer[i]=ret;
 		printk(KERN_INFO "buffer %i i\n", ret);
 	}
+	nrf24_devp->payload_buffer_list[item_index].id = payload_buffer[0];
+	nrf24_devp->payload_buffer_list[item_index].source_address = payload_buffer[1];
+	nrf24_devp->payload_buffer_list[item_index].value = payload_buffer[2];
+	nrf24_devp->payload_buffer_list[item_index].aux = payload_buffer[3];
+	item_index++;
+	if (item_index == NRF24_PAYLOAD_BUFFER_LENGTH)
+	{
+		item_index = 0;
+	}
+
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
 
