@@ -129,6 +129,7 @@ struct class* nrf24_class;
 static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
 	int ret;
+	unsigned long flags;
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
 	ret = nrf24_get_register(NRF24_REG_STATUS);	
@@ -136,9 +137,9 @@ static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 	if (ret & 0x40)
 	{
 		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-		spin_lock(&nrf24_devp->spinlock);
+		spin_lock_irqsave(&nrf24_devp->spinlock, flags);
 		nrf24_read_payload();
-		spin_unlock(&nrf24_devp->spinlock);
+		spin_unlock_irqrestore(&nrf24_devp->spinlock, flags);
 		printk(KERN_INFO "nrf24: IRQ trigger: Packet received\n"); 
 	}
 
@@ -173,6 +174,8 @@ static int __init nrf24_mod_init(void)
 		printk(KERN_INFO "nrf24: Bad kmalloc\n");
 		return -1;
 	}
+
+	spin_lock_init(&nrf24_devp->spinlock);
 	mutex_init(&nrf24_devp->lock);
 
 	if (mutex_lock_interruptible(&nrf24_devp->lock))	
