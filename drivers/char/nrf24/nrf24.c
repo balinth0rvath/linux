@@ -81,16 +81,15 @@ typedef struct {
 /* Per device structure */
 struct nrf24_dev {
 	nrf24_payload_buffer_item_t payload_buffer_list[NRF24_PAYLOAD_BUFFER_LENGTH];
-	u8 item_index;
+	u8 payload_buffer_head;
+	u8 payload_buffer_tail;
 	struct cdev cdev;
 	char name[10];
-	int busy;
 	struct mutex lock;   
 	spinlock_t spinlock;
 } * nrf24_devp;
 
 int irq_counter;
-static u8 item_index;
 
 static ssize_t nrf24_read(struct file*, char*, size_t, loff_t*);
 static ssize_t nrf24_write(struct file *, const char __user *, size_t, loff_t *);
@@ -137,9 +136,7 @@ static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 	if (ret & 0x40)
 	{
 		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-		spin_lock_irqsave(&nrf24_devp->spinlock, flags);
 		nrf24_read_payload();
-		spin_unlock_irqrestore(&nrf24_devp->spinlock, flags);
 		printk(KERN_INFO "nrf24: IRQ trigger: Packet received\n"); 
 	}
 
@@ -199,7 +196,6 @@ static int __init nrf24_mod_init(void)
 	device_create(nrf24_class, NULL, nrf24_device_number, NULL, "nrf24d");
 	
 	// clear payload buffer	
-	nrf24_devp->busy=0;
 	for(i=0; i<NRF24_PAYLOAD_BUFFER_LENGTH; i++)
 	{
 		nrf24_devp->payload_buffer_list[i].id=0;
@@ -208,6 +204,10 @@ static int __init nrf24_mod_init(void)
 		nrf24_devp->payload_buffer_list[i].aux=0;
 	
 	}
+	// init ring buffer
+	nrf24_devp->payload_buffer_head = 0;
+	nrf24_devp->payload_buffer_tail = 0;
+	
 	// set IRQ and MISO to input
 
 	if (gpio_direction_input(NRF24_GPIO_IRQ)!=0 ||
@@ -284,8 +284,10 @@ static void __exit nrf24_mod_exit(void)
 
 static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * offset)
 {
-	int stat=0;
+	char local_list[4 * NRF24_PAYLOAD_BUFFER_LENGTH];
+	u8 i=0;
 	struct nrf24_dev* nrf24_devp;
+	printk(KERN_INFO "nrf24: nrf24_read_start\n");
 	nrf24_devp=file->private_data;
 	
 	if (mutex_lock_interruptible(&nrf24_devp->lock))	
@@ -294,28 +296,36 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 		return -1;
 	} 
 
-	printk(KERN_INFO "read started\n");	
-	stat = nrf24_get_register(NRF24_REG_STATUS);
-	printk(KERN_INFO "REG STATUS %x\n", stat);
-
-	stat = nrf24_get_register(NRF24_REG_FIFO_STATUS);
-	printk(KERN_INFO "REG FIFO STATUS %x\n", stat);
-	if (copy_to_user(buf, (void*)nrf24_devp->payload_buffer_list, 4)!=0)
+	if (nrf24_devp->payload_buffer_head == nrf24_devp->payload_buffer_tail)
 	{
+		mutex_unlock(&nrf24_devp->lock);
+		return 0;
+	}
+	while(nrf24_devp->payload_buffer_head != nrf24_devp->payload_buffer_tail && i != count )
+	{
+		local_list[i] = nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_tail].id;
+		local_list[i+1] = nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_tail].source_address;
+		local_list[i+2] = nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_tail].value;
+		local_list[i+3] = nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_tail].aux;
+		nrf24_devp->payload_buffer_tail++;
+		i=i+4;
+		if (nrf24_devp->payload_buffer_tail == NRF24_PAYLOAD_BUFFER_LENGTH)
+		{
+			nrf24_devp->payload_buffer_tail = 0;
+		}	
+	}	
+
+	if (copy_to_user(buf, (void*)local_list, i)!=0)
+	{
+		mutex_unlock(&nrf24_devp->lock);
 		return -EIO;
 	}
-	
+	printk(KERN_INFO "nrf24: after read, head: %i tail: %i \n", 
+		nrf24_devp->payload_buffer_head,
+		nrf24_devp->payload_buffer_tail);
 	printk(KERN_INFO "nrf24: Count=%i\n",count);
-	if (nrf24_devp->busy) {
-		nrf24_devp->busy=0;
-		return 0;
-	} else
-	{
-		nrf24_devp->busy=1;
-		return 4;
-	}	
 	mutex_unlock(&nrf24_devp->lock);
-	return 4;
+	return i;
 }
 
 
@@ -580,17 +590,29 @@ static void nrf24_read_payload()
 	{
 		ret = nrf24_send_byte(NRF24_CMD_NOP);
 		payload_buffer[i]=ret;
-		printk(KERN_INFO "buffer %i i\n", ret);
 	}
-	nrf24_devp->payload_buffer_list[item_index].id = payload_buffer[0];
-	nrf24_devp->payload_buffer_list[item_index].source_address = payload_buffer[1];
-	nrf24_devp->payload_buffer_list[item_index].value = payload_buffer[2];
-	nrf24_devp->payload_buffer_list[item_index].aux = payload_buffer[3];
-	item_index++;
-	if (item_index == NRF24_PAYLOAD_BUFFER_LENGTH)
+
+	// spin lock from here
+	spin_lock_irqsave(&nrf24_devp->spinlock, flags);
+	nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_head].id = payload_buffer[0];
+	nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_head].source_address = payload_buffer[1];
+	nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_head].value = payload_buffer[2];
+	nrf24_devp->payload_buffer_list[nrf24_devp->payload_buffer_head].aux = payload_buffer[3];
+	nrf24_devp->payload_buffer_head++;
+	spin_unlock_irqrestore(&nrf24_devp->spinlock, flags);
+	if (nrf24_devp->payload_buffer_head == NRF24_PAYLOAD_BUFFER_LENGTH)
 	{
-		item_index = 0;
+		nrf24_devp->payload_buffer_head = 0;
 	}
+	// end of spin lock
+
+	if (nrf24_devp->payload_buffer_head == nrf24_devp->payload_buffer_tail)
+	{
+		printk(KERN_INFO "nrf24: Ring buffer overflow\n");
+	} 
+	printk(KERN_INFO "nrf24: IRQ head: %i tail: %i\n",
+		nrf24_devp->payload_buffer_head,
+		nrf24_devp->payload_buffer_tail);
 
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
