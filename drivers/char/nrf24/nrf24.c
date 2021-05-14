@@ -320,8 +320,16 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 {
 	u8 status;
 	int wait = 1000;
+	int payload_size;
+
 	char payload[4];
-	if (copy_from_user(payload, userp, 4)!=0)
+	printk(KERN_INFO "size %i  \n", size);
+	payload_size = size - 1;
+	if (payload_size > 4)
+	{
+		payload_size = 4;
+	}
+	if (copy_from_user(payload, userp, payload_size)!=0)
 		return -1;
 	spin_lock_irq(&nrf24_devp->spinlock);
 	nrf24_devp=filep->private_data;
