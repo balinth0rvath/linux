@@ -8,7 +8,7 @@
 #include <linux/delay.h>
 #include <asm/io.h>
 #include <linux/interrupt.h>
-#include <linux/mutex.h>
+#include <linux/spinlock.h>
 #include <linux/nrf24.h>
 
 #define DEVICE_NAME "nrf24-device"
@@ -85,7 +85,6 @@ struct nrf24_dev {
 	u8 payload_buffer_tail;
 	struct cdev cdev;
 	char name[10];
-	struct mutex lock;   
 	spinlock_t spinlock;
 } * nrf24_devp;
 
@@ -128,7 +127,6 @@ struct class* nrf24_class;
 static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 {
 	int ret;
-	unsigned long flags;
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
 	ret = nrf24_get_register(NRF24_REG_STATUS);	
@@ -173,13 +171,7 @@ static int __init nrf24_mod_init(void)
 	}
 
 	spin_lock_init(&nrf24_devp->spinlock);
-	mutex_init(&nrf24_devp->lock);
-
-	if (mutex_lock_interruptible(&nrf24_devp->lock))	
-	{
-		printk(KERN_INFO "nrf24: Init interrupted \n");
-		return -1;
-	}
+	spin_lock_irq(&nrf24_devp->spinlock);
 	
 	// connect fops with cdev
 	cdev_init(&nrf24_devp->cdev, &nrf24_fops);
@@ -188,7 +180,7 @@ static int __init nrf24_mod_init(void)
 	// connect minor major number to cdev
  	if (cdev_add(&nrf24_devp->cdev, nrf24_device_number, 1)) {
 		printk(KERN_INFO "nrf24: cdev add failed\n");
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -1;
 	}
 	
@@ -214,7 +206,7 @@ static int __init nrf24_mod_init(void)
 		gpio_direction_input(NRF24_GPIO_MISO)!=0)
 	{
 		printk(KERN_INFO "nrf24: Cannot set GPIO %i %i to input \n", NRF24_GPIO_IRQ, NRF24_GPIO_MISO);
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -1;
 	}
 
@@ -225,7 +217,7 @@ static int __init nrf24_mod_init(void)
 
 	{
 		printk(KERN_INFO "nrf24: Cannot set GPIO %i %i %i %i to output \n", NRF24_GPIO_CE, NRF24_GPIO_SCLK, NRF24_GPIO_MOSI, NRF24_GPIO_CSN);
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -1;
 	}
 
@@ -235,7 +227,7 @@ static int __init nrf24_mod_init(void)
 	if (nrf24_check_device())
 	{
 		printk(KERN_INFO "nrf24: Device not found \n");
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -1;
 	}	
 
@@ -245,7 +237,7 @@ static int __init nrf24_mod_init(void)
 	if (request_irq(irq_line, nrf24_irq_handler, IRQF_TRIGGER_FALLING, "Interrupt nRF24 GPIO ", NULL)<0)
 	{
 		printk(KERN_INFO "nrf24: Cannot get IRQ for GPIO %i \n", NRF24_GPIO_IRQ);
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -1;
 	}
 	irq_counter = 0;
@@ -253,7 +245,7 @@ static int __init nrf24_mod_init(void)
 	nrf24_init_device();
 	printk(KERN_INFO "nrf24: Device initialized\n");
 	nrf24_show_status();
-	mutex_unlock(&nrf24_devp->lock);
+	spin_unlock_irq(&nrf24_devp->spinlock);
 	return 0;
 }
 
@@ -290,15 +282,10 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	printk(KERN_INFO "nrf24: nrf24_read_start\n");
 	nrf24_devp=file->private_data;
 	
-	if (mutex_lock_interruptible(&nrf24_devp->lock))	
-	{
-		printk(KERN_INFO "nrf24: Init interrupted \n");
-		return -1;
-	} 
-
+	spin_lock_irq(&nrf24_devp->spinlock);
 	if (nrf24_devp->payload_buffer_head == nrf24_devp->payload_buffer_tail)
 	{
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return 0;
 	}
 	while(nrf24_devp->payload_buffer_head != nrf24_devp->payload_buffer_tail && i != count )
@@ -317,14 +304,14 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 
 	if (copy_to_user(buf, (void*)local_list, i)!=0)
 	{
-		mutex_unlock(&nrf24_devp->lock);
+		spin_unlock_irq(&nrf24_devp->spinlock);
 		return -EIO;
 	}
 	printk(KERN_INFO "nrf24: after read, head: %i tail: %i \n", 
-		nrf24_devp->payload_buffer_head,
-		nrf24_devp->payload_buffer_tail);
+	nrf24_devp->payload_buffer_head,
+	nrf24_devp->payload_buffer_tail);
 	printk(KERN_INFO "nrf24: Count=%i\n",count);
-	mutex_unlock(&nrf24_devp->lock);
+	spin_unlock_irq(&nrf24_devp->spinlock);
 	return i;
 }
 
@@ -336,13 +323,7 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	char payload[4];
 	if (copy_from_user(payload, userp, 4)!=0)
 		return -1;
-		
-	if (mutex_lock_interruptible(&nrf24_devp->lock))	
-	{
-		printk(KERN_INFO "nrf24: Error, cannot lock device data \n");
-		return -1;
-	} 
-
+	spin_lock_irq(&nrf24_devp->spinlock);
 	nrf24_devp=filep->private_data;
 	printk(KERN_INFO "nrf24: Transmitting payload %i %i %i %i \n", 
 		payload[0], payload[1], payload[2], payload[3]);	
@@ -367,7 +348,7 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 
 	printk(KERN_INFO "nrf24: Clearing interrupt flags... \n");
   nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
-	mutex_unlock(&nrf24_devp->lock);
+	spin_unlock_irq(&nrf24_devp->spinlock);
 	return 5;
 }
 
@@ -580,6 +561,7 @@ static void nrf24_transmit_packet(char* payload, u8* status, int* wait)
 
 static void nrf24_read_payload()
 {
+	unsigned long flags;
 	int i;
 	int ret;
 	char payload_buffer[NRF24_PAYLOAD_BUFFER_LENGTH];
