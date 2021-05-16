@@ -9,6 +9,7 @@
 #include <asm/io.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
+#include <linux/ioctl.h>
 #include <linux/nrf24.h>
 
 #define DEVICE_NAME "nrf24-device"
@@ -16,6 +17,14 @@
 // TODO via IOCTL
 #define NRF24_SET_RECEIVER						1
 #define NRF24_PAYLOAD_BUFFER_LENGTH		128
+
+// IOCTL commands
+#define NRF24_IOCTL_SET_PRIM_RX 0
+#define NRF24_IOCTL_SET_PRIM_TX 1
+ 
+#define NRF24_IOCTL_SET_RECEIVER _IO(153, NRF24_IOCTL_SET_PRIM_RX)
+#define NRF24_IOCTL_SET_TRANSMITTER _IO(153, NRF24_IOCTL_SET_PRIM_TX)
+
 
 // GPIO pin settings 
 #define NRF24_GPIO_CE 								16								// GPIO16
@@ -379,15 +388,17 @@ static int nrf24_release(struct inode * node, struct file * file)
 static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
 	//u8 ret = 0;
-	printk(KERN_INFO "nrf24: ioctl command: %iu argument %lu \n", cmd, arg);
-	switch (cmd)
+	printk(KERN_INFO "nrf24: ioctl command: %u argument %lu \n", cmd, arg);
+	switch (cmd & 0xff)
 	{
-		case NRF24_SET_PRIM_RX:
+		case NRF24_IOCTL_SET_PRIM_RX:
+			printk(KERN_INFO "nrf24: Set PRIM RX IOCTL called\n");
 			nrf24_write_register(NRF24_REG_CONFIG, 1, 1); 
 			
 			break;
 
-		case NRF24_SET_PRIM_TX:
+		case NRF24_IOCTL_SET_PRIM_TX:
+			printk(KERN_INFO "nrf24: Set PRIM TX IOCTL called\n");
 			nrf24_write_register(NRF24_REG_CONFIG, 0, 1);
 			break;
 		
