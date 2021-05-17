@@ -139,10 +139,10 @@ static irqreturn_t nrf24_irq_handler(int irq, void* dev_id)
 	irq_counter++;
 	printk(KERN_INFO "nrf24: %i irq handled: %i \n", NRF24_GPIO_IRQ, irq_counter);
 	ret = nrf24_get_register(NRF24_REG_STATUS);	
+	nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 
 	if (ret & 0x40)
 	{
-		nrf24_write_register(NRF24_REG_STATUS,0x70,0x70);
 		nrf24_read_payload();
 		printk(KERN_INFO "nrf24: IRQ trigger: Packet received\n"); 
 	}
@@ -295,6 +295,7 @@ static ssize_t nrf24_read(struct file *file, char* buf, size_t count, loff_t * o
 	if (nrf24_devp->payload_buffer_head == nrf24_devp->payload_buffer_tail)
 	{
 		spin_unlock_irq(&nrf24_devp->spinlock);
+		printk(KERN_INFO "nrf24: head is on tail\n");
 		return 0;
 	}
 	while(nrf24_devp->payload_buffer_head != nrf24_devp->payload_buffer_tail && i != count )
@@ -394,7 +395,9 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 		case NRF24_IOCTL_SET_PRIM_RX:
 			printk(KERN_INFO "nrf24: Set PRIM RX IOCTL called\n");
 			nrf24_write_register(NRF24_REG_CONFIG, 1, 1); 
-			
+			gpio_set_value(NRF24_GPIO_CE, 1);
+			printk(KERN_INFO "nrf24: Set CE high\n");
+			mdelay(2);	
 			break;
 
 		case NRF24_IOCTL_SET_PRIM_TX:
