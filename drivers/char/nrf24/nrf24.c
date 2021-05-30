@@ -41,7 +41,7 @@ struct ADDRESS_T {
 #define NRF24_GPIO_CSN								26								// GPIO26
 #define NRF24_GPIO_IRQ	 							13								// GPIO13
 #define NRF24_GPIO_MISO								19								// GPIO19
-#define NRF24_SPI_HALF_CLK						500								// SCLK half period ns
+#define NRF24_SPI_HALF_CLK						100								// SCLK half period ns
 
 // nRF24 commands
 #define NRF24_CMD_R_REGISTER 					0x00
