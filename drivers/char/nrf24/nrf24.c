@@ -18,12 +18,20 @@
 #define NRF24_SET_RECEIVER						1
 #define NRF24_PAYLOAD_BUFFER_LENGTH		128
 
+// IOCTL struct
+struct ADDRESS_T {
+	u8 octet[5];
+};
+
 // IOCTL commands
-#define NRF24_IOCTL_SET_PRIM_RX 0
-#define NRF24_IOCTL_SET_PRIM_TX 1
+#define NRF24_IOCTL_CMD_SET_PRIM_RX 0
+#define NRF24_IOCTL_CMD_SET_PRIM_TX 1
+#define NRF24_IOCTL_CMD_SET_ADDRESS 2
  
-#define NRF24_IOCTL_SET_RECEIVER _IO(153, NRF24_IOCTL_SET_PRIM_RX)
-#define NRF24_IOCTL_SET_TRANSMITTER _IO(153, NRF24_IOCTL_SET_PRIM_TX)
+#define NRF24_IOCTL_SET_RECEIVER _IO(153, NRF24_IOCTL_CMD_SET_PRIM_RX)
+#define NRF24_IOCTL_SET_TRANSMITTER _IO(153, NRF24_IOCTL_CMD_SET_PRIM_TX)
+#define NRF24_IOCTL_SET_ADDRESS _IOW(153, NRF24_IOCTL_CMD_SET_ADDRESS, ADDRESS_T)
+
 
 
 // GPIO pin settings 
@@ -117,6 +125,7 @@ static void nrf24_flush_rx(void);
 
 static int nrf24_get_register(u8 reg);
 static void nrf24_get_address_register(u8 reg, u8* result);
+static void nrf24_set_address_register(u8 reg, u8* address);
 static void nrf24_write_payload(char* payload);
 static void nrf24_write_register(u8 register, u8 value, u8 mask);
 static u8 	nrf24_send_byte(u8 value);
@@ -388,11 +397,17 @@ static int nrf24_release(struct inode * node, struct file * file)
 
 static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
-	//u8 ret = 0;
+	u8 ret = 0;
+	struct ADDRESS_T* address = (struct ADDRESS_T*) kmalloc(sizeof(struct ADDRESS_T), GFP_KERNEL);
 	printk(KERN_INFO "nrf24: ioctl command: %u argument %lu \n", cmd, arg);
+	if (!address)
+	{
+		printk("nrf24: Failed to allocate address\n");
+		return -1;
+	}
 	switch (cmd & 0xff)
 	{
-		case NRF24_IOCTL_SET_PRIM_RX:
+		case NRF24_IOCTL_CMD_SET_PRIM_RX:
 			printk(KERN_INFO "nrf24: Set PRIM RX IOCTL called\n");
 			nrf24_write_register(NRF24_REG_CONFIG, 1, 1); 
 			gpio_set_value(NRF24_GPIO_CE, 1);
@@ -400,16 +415,31 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 			mdelay(2);	
 			break;
 
-		case NRF24_IOCTL_SET_PRIM_TX:
+		case NRF24_IOCTL_CMD_SET_PRIM_TX:
 			printk(KERN_INFO "nrf24: Set PRIM TX IOCTL called\n");
 			nrf24_write_register(NRF24_REG_CONFIG, 0, 1);
 			break;
-		
+	
+		case NRF24_IOCTL_CMD_SET_ADDRESS:
+			if (copy_from_user(address, (long*)arg, sizeof(struct ADDRESS_T)))
+			{
+				printk(KERN_INFO "nrf24: Failed to copy from user\n");
+				ret = -1;
+				break;
+			}
+			printk(KERN_INFO "nrf24: Set address to %i %i %i %i %i\n", 
+				address->octet[0],
+				address->octet[1],
+				address->octet[2],
+				address->octet[3],
+				address->octet[4]
+			);	
+			break;
 		default:
 			break;
 	}
-
-	return 0;
+	kfree(address);
+	return ret;
 }
 
 static void nrf24_init_device()
@@ -658,6 +688,19 @@ static void nrf24_get_address_register(u8 reg, u8* result)
 	for(i=0;i<5;i++)
 	{
 		 *(result + i) = nrf24_send_byte(NRF24_CMD_NOP);
+	}
+	gpio_set_value(NRF24_GPIO_CSN, 1);
+}
+
+static void nrf24_set_address_register(u8 reg, u8* address)
+{
+	int i;
+	gpio_set_value(NRF24_GPIO_CSN, 0);
+	ndelay(NRF24_SPI_HALF_CLK);
+	nrf24_send_byte(NRF24_CMD_W_REGISTER | reg);
+	for(i=0;i<5;i++)
+	{
+		 nrf24_send_byte(*(address+i));
 	}
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 }
