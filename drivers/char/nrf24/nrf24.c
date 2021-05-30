@@ -397,7 +397,8 @@ static int nrf24_release(struct inode * node, struct file * file)
 
 static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
-	u8 ret = 0;
+	u8 i = 0, ret = 0;
+	u8 address_array[5]={};
 	struct ADDRESS_T* address = (struct ADDRESS_T*) kmalloc(sizeof(struct ADDRESS_T), GFP_KERNEL);
 	printk(KERN_INFO "nrf24: ioctl command: %u argument %lu \n", cmd, arg);
 	if (!address)
@@ -417,7 +418,10 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 
 		case NRF24_IOCTL_CMD_SET_PRIM_TX:
 			printk(KERN_INFO "nrf24: Set PRIM TX IOCTL called\n");
+			gpio_set_value(NRF24_GPIO_CE, 0);
+			printk(KERN_INFO "nrf24: Set CE low \n");
 			nrf24_write_register(NRF24_REG_CONFIG, 0, 1);
+			mdelay(2);	
 			break;
 	
 		case NRF24_IOCTL_CMD_SET_ADDRESS:
@@ -434,6 +438,12 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 				address->octet[3],
 				address->octet[4]
 			);	
+			for(i=0;i<5;i++)
+			{
+				address_array[i]=address->octet[i];
+			}
+			//nrf24_set_address_register(NRF24_REG_RX_ADDR_P0, address_array);
+			//nrf24_set_address_register(NRF24_REG_TX_ADDR, address_array);
 			break;
 		default:
 			break;
@@ -695,6 +705,9 @@ static void nrf24_get_address_register(u8 reg, u8* result)
 static void nrf24_set_address_register(u8 reg, u8* address)
 {
 	int i;
+	int ce;
+	ce = gpio_get_value(NRF24_GPIO_CE);
+	gpio_set_value(NRF24_GPIO_CE, 0);
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
 	nrf24_send_byte(NRF24_CMD_W_REGISTER | reg);
@@ -703,6 +716,8 @@ static void nrf24_set_address_register(u8 reg, u8* address)
 		 nrf24_send_byte(*(address+i));
 	}
 	gpio_set_value(NRF24_GPIO_CSN, 1);
+	gpio_set_value(NRF24_GPIO_CE, ce);
+
 }
 
 static void nrf24_write_payload(char* payload)
