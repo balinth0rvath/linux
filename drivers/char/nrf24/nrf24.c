@@ -365,6 +365,10 @@ static ssize_t nrf24_write(struct file * filep, const char __user * userp, size_
 	if (status & 0x10)
 	{
 		printk(KERN_INFO "nrf24: Transmit error, max retry count reached \n");
+		nrf24_flush_tx();
+		nrf24_flush_rx();
+
+		printk(KERN_INFO "nrf24: RX TX flushed \n");
 	} else 
 	if (status & 0x20)
 	{
