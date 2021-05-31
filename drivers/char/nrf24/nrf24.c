@@ -446,8 +446,8 @@ static long nrf24_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 			{
 				address_array[i]=address->octet[i];
 			}
-			//nrf24_set_address_register(NRF24_REG_RX_ADDR_P0, address_array);
-			//nrf24_set_address_register(NRF24_REG_TX_ADDR, address_array);
+			nrf24_set_address_register(NRF24_REG_RX_ADDR_P0, address_array);
+			nrf24_set_address_register(NRF24_REG_TX_ADDR, address_array);
 			break;
 		default:
 			break;
@@ -714,10 +714,11 @@ static void nrf24_set_address_register(u8 reg, u8* address)
 	gpio_set_value(NRF24_GPIO_CE, 0);
 	gpio_set_value(NRF24_GPIO_CSN, 0);
 	ndelay(NRF24_SPI_HALF_CLK);
+	printk(KERN_INFO "reg: %i\n", reg);
 	nrf24_send_byte(NRF24_CMD_W_REGISTER | reg);
 	for(i=0;i<5;i++)
 	{
-		 nrf24_send_byte(*(address+i));
+		nrf24_send_byte(*(address+i));
 	}
 	gpio_set_value(NRF24_GPIO_CSN, 1);
 	gpio_set_value(NRF24_GPIO_CE, ce);
