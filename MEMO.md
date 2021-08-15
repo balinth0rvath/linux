@@ -63,4 +63,4 @@ $ make ARCH=arm CROSS_COMPILE=arm-poky-linux-gnueabi- zImage modules dtbs
 ```
 $ cd <linux source root>
 $ . /opt/poky/3.2.2/environment-setup-cortexa7t2hf-neon-vfpv4-poky-linux-gnueabi 
-$ make ARCH=arm CROSS_COMPILE=arm-poky-linux-gnueabi- -C . M=drivers/char/skeleton/
+$ make ARCH=arm CROSS_COMPILE=arm-poky-linux-gnueabi- -C . M=drivers/char/nrf24/
