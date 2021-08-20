@@ -50,6 +50,9 @@ $ bitbake core-image-minimal -c populate_sdk
 $ tmp/deploy/sdk/poky-glibc-x86_64-core-image-minimal-cortexa7t2hf-neon-vfpv4-raspberrypi3-toolchain-3.2.2.sh
 ```
 
+### Install packages
+$ sudo apt-get install libssl-dev
+
 ### Build Kernel
 ```
 $ cd <linux source root>
